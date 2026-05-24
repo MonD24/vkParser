@@ -4,7 +4,6 @@ tg_control.py — Telegram-бот для управления: /start /stop /sta
 """
 import os
 import threading
-import asyncio
 from dotenv import load_dotenv
 from logger import get_logger
 
@@ -65,8 +64,10 @@ async def cmd_now(update: "Update", ctx: "ContextTypes.DEFAULT_TYPE"):
     if not _is_owner(update): return
     await update.message.reply_text("🔍 Запускаю внеплановый цикл поиска...")
     log.info("Внеплановый цикл по команде /now")
-    loop = asyncio.get_event_loop()
     if _run_cycle_fn:
+        await ctx.application.updater.bot.get_me()  # keep-alive
+        import asyncio
+        loop = asyncio.get_event_loop()
         await loop.run_in_executor(None, _run_cycle_fn)
     await update.message.reply_text("✅ Цикл завершён.")
 
@@ -107,7 +108,7 @@ async def cmd_list(update: "Update", ctx: "ContextTypes.DEFAULT_TYPE"):
 
 
 def run_control_bot():
-    """Запускает TG control bot в отдельном event loop."""
+    """Запускает TG control bot. Должен вызываться из ГЛАВНОГО потока."""
     if not _TG_AVAILABLE:
         log.warning("python-telegram-bot не установлен — управляющий бот недоступен")
         return
@@ -116,10 +117,6 @@ def run_control_bot():
         log.warning("TG_BOT_TOKEN не задан — управляющий бот недоступен")
         return
     try:
-        # Создаём новый event loop для этого потока
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-
         app = ApplicationBuilder().token(token).build()
         app.add_handler(CommandHandler("start",  cmd_start))
         app.add_handler(CommandHandler("stop",   cmd_stop))
@@ -127,20 +124,10 @@ def run_control_bot():
         app.add_handler(CommandHandler("status", cmd_status))
         app.add_handler(CommandHandler("list",   cmd_list))
         log.info("TG управляющий бот запущен. Команды: /start /stop /now /status /list")
-        # run_polling нельзя из потока — используем низкоуровневый запуск
-        loop.run_until_complete(_run_app(app))
+        # run_polling работает только из главного потока — именно там и вызываемся
+        app.run_polling(drop_pending_updates=True)
     except Exception as e:
         log.error(f"TG control bot ошибка: {e}")
-
-
-async def _run_app(app):
-    """Запускает polling без set_wakeup_fd (совместимо с не-главным потоком)."""
-    await app.initialize()
-    await app.updater.start_polling(drop_pending_updates=True)
-    await app.start()
-    # Ждём бесконечно
-    while True:
-        await asyncio.sleep(3600)
 
 
 def start_in_thread() -> threading.Thread:
