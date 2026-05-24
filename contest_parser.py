@@ -261,15 +261,14 @@ def parse_conditions(text: str) -> dict:
         if re.search(u"(напиш|коммент|написать|write)[^\u00ab\u00bb\u201c\u2018\n]{0,30}[\u00ab\u201c\u2018\"]", t):
             hard = True
 
-    # Если нужна подписка на группу, но в тексте нет ссылки на группу —
-    # группа указана по названию (не по ссылке), автоматически вступить невозможно
+    # Дополнительно ищем короткие адреса групп: vk.com/shortname или @shortname
     if need_join and not groups_to_join:
-        # Проверяем: пост сам из группы (owner_id < 0) — тогда ОК, подпишемся на неё
-        # Это решается в bot_engine.py, здесь просто помечаем как требующий ссылки
-        # Если в тексте есть "подписка на группу" или "вступите в группу" без ссылки — hard
-        if re.search(r"подписк[ауи] на группу|вступ[ие]те? в группу|подпишитесь на группу", t):
-            log.debug("Пост отклонён: требует подписки на группу без ссылки")
-            hard = True
+        for m in re.finditer(r"vk\.com/([a-zA-Z][a-zA-Z0-9_]{2,})", text, re.IGNORECASE):
+            slug = m.group(1)
+            if slug.lower() not in ("wall", "photo", "video", "album", "topic", "id"):
+                groups_to_join.append(slug)  # тип str — slug, разрешается в bot_engine
+        for m in re.finditer(r"@([a-zA-Z][a-zA-Z0-9_]{2,})", text):
+            groups_to_join.append(m.group(1))
 
     # выполнимо если есть хотя бы одно автоматизируемое условие (включая комментарий)
     feasible = (need_repost or need_like or need_join or need_comment) and not hard

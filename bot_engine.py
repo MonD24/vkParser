@@ -142,8 +142,22 @@ def _fulfill_contest(contest_id: int, owner_id: int, post_id: int, cond: dict,
         groups = cond["groups_to_join"]
         if not groups and owner_id < 0:
             groups = [abs(owner_id)]
+        # Резолвим slug → group_id если нужно
+        resolved_groups = []
+        for g in groups:
+            if isinstance(g, int):
+                resolved_groups.append(g)
+            else:
+                gid = vk.resolve_screen_name(g)
+                if gid:
+                    resolved_groups.append(gid)
+                else:
+                    log.debug(f"Не удалось разрезолвить slug: {g}")
+        # Если вообще нет групп для вступления — пытаемся использовать автора поста
+        if not resolved_groups and owner_id < 0:
+            resolved_groups = [abs(owner_id)]
         joined = []
-        for gid in groups:
+        for gid in resolved_groups:
             if vk.join_group(gid):
                 joined.append(gid)
                 db.log_action(contest_id, "join_group", str(gid))

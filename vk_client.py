@@ -104,6 +104,19 @@ def join_group(group_id: int) -> bool:
         return False
 
 
+def resolve_screen_name(slug: str) -> int | None:
+    """Резолвит короткий адрес VK (slug) в числовой group_id. Возвращает None если не группа."""
+    vk = _get_vk()
+    try:
+        res = vk.utils.resolveScreenName(screen_name=slug)
+        if res and res.get("type") in ("group", "public", "event"):
+            return int(res["object_id"])
+        return None
+    except ApiError as e:
+        log.warning(f"resolveScreenName({slug}): {e}")
+        return None
+
+
 def leave_group(group_id: int) -> bool:
     """Покинуть группу."""
     vk = _get_vk()
