@@ -1,0 +1,19 @@
+# Секреты — никогда не пушим
+.env
+
+# База данных и логи
+contests.db
+logs/
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# IDE
+.vscode/
+.idea/
+*.swp
