@@ -4,6 +4,7 @@ tg_control.py — Telegram-бот для управления: /start /stop /sta
 """
 import os
 import threading
+import time
 from dotenv import load_dotenv
 from logger import get_logger
 
@@ -19,10 +20,30 @@ except ImportError:
     _TG_AVAILABLE = False
 
 # Глобальные ссылки — устанавливаются из main.py
-_scheduler_ref = None
-_run_cycle_fn  = None
-_bot_running   = True
-_cycle_lock    = threading.Lock()  # защита от параллельных /now
+_scheduler_ref  = None
+_run_cycle_fn   = None
+_bot_running    = True
+_cycle_lock     = threading.Lock()   # защита от параллельных /now
+_freshness_lock = threading.Lock()   # атомарность read-check-write в _is_fresh
+_bot_start_time = 0                  # unix timestamp момента запуска бота
+_seen_updates: set[int] = set()      # дедупликация update_id (in-memory)
+_seen_messages: set[int] = set()     # дедупликация message_id (главная защита)
+
+_OFFSET_FILE = "/opt/botwim/.last_update_id"
+
+def _load_last_update_id() -> int:
+    try:
+        with open(_OFFSET_FILE) as f:
+            return int(f.read().strip())
+    except Exception:
+        return 0
+
+def _save_last_update_id(uid: int):
+    try:
+        with open(_OFFSET_FILE, "w") as f:
+            f.write(str(uid))
+    except Exception:
+        pass
 
 
 def set_refs(scheduler, run_cycle_fn):
@@ -37,8 +58,48 @@ def _is_owner(update: "Update") -> bool:
     return str(update.effective_chat.id) == owner
 
 
+def _is_fresh(update: "Update") -> bool:
+    """Игнорируем команды, отправленные до запуска бота (pending updates),
+    и дедуплицируем по message_id — защита от Telegram-дублей с разными update_id."""
+    uid = update.update_id
+    msg = update.message
+    msg_id = msg.message_id if msg else 0
+    msg_time = msg.date.timestamp() if msg else 0
+    log.info(f"[_is_fresh] update_id={uid} message_id={msg_id} msg_time={msg_time:.0f} bot_start={_bot_start_time:.0f}")
+
+    if msg_time < _bot_start_time:
+        log.warning(f"[_is_fresh] SKIP update_id={uid}: msg_time({msg_time:.0f}) < bot_start({_bot_start_time:.0f})")
+        return False
+
+    with _freshness_lock:
+        # Дедупликация по message_id — главная защита от Telegram-дублей
+        if msg_id and msg_id in _seen_messages:
+            log.warning(f"[_is_fresh] DUPLICATE message_id={msg_id} (update_id={uid}) — пропускаем")
+            return False
+
+        # Дедупликация по update_id (in-memory)
+        if uid in _seen_updates:
+            log.warning(f"[_is_fresh] DUPLICATE update_id={uid} in-memory — пропускаем")
+            return False
+
+        # disk-based проверка (переживает рестарт)
+        last = _load_last_update_id()
+        log.info(f"[_is_fresh] disk last_id={last}, incoming uid={uid}")
+        if uid <= last:
+            log.warning(f"[_is_fresh] DUPLICATE on-disk update_id={uid} (last={last}) — пропускаем")
+            return False
+
+        # принимаем — сохраняем везде атомарно
+        if msg_id:
+            _seen_messages.add(msg_id)
+        _seen_updates.add(uid)
+        _save_last_update_id(uid)
+        log.info(f"[_is_fresh] ACCEPT update_id={uid} message_id={msg_id}, saved")
+        return True
+
+
 async def cmd_start(update: "Update", ctx: "ContextTypes.DEFAULT_TYPE"):
-    if not _is_owner(update): return
+    if not _is_owner(update) or not _is_fresh(update): return
     global _bot_running
     if _scheduler_ref and not _scheduler_ref.running:
         _scheduler_ref.resume()
@@ -50,7 +111,7 @@ async def cmd_start(update: "Update", ctx: "ContextTypes.DEFAULT_TYPE"):
 
 
 async def cmd_stop(update: "Update", ctx: "ContextTypes.DEFAULT_TYPE"):
-    if not _is_owner(update): return
+    if not _is_owner(update) or not _is_fresh(update): return
     global _bot_running
     if _scheduler_ref and _scheduler_ref.running:
         _scheduler_ref.pause()
@@ -62,7 +123,7 @@ async def cmd_stop(update: "Update", ctx: "ContextTypes.DEFAULT_TYPE"):
 
 
 async def cmd_now(update: "Update", ctx: "ContextTypes.DEFAULT_TYPE"):
-    if not _is_owner(update): return
+    if not _is_owner(update) or not _is_fresh(update): return
     if not _cycle_lock.acquire(blocking=False):
         await update.message.reply_text("⏳ Цикл уже выполняется, подождите...")
         return
@@ -124,13 +185,20 @@ def run_control_bot():
         return
     try:
         app = ApplicationBuilder().token(token).build()
+
+        async def _post_init(application):
+            global _bot_start_time
+            _bot_start_time = time.time()
+            log.info("TG бот инициализирован, pending апдейты сброшены через drop_pending_updates=True")
+
+        app.post_init = _post_init
+
         app.add_handler(CommandHandler("start",  cmd_start))
         app.add_handler(CommandHandler("stop",   cmd_stop))
         app.add_handler(CommandHandler("now",    cmd_now))
         app.add_handler(CommandHandler("status", cmd_status))
         app.add_handler(CommandHandler("list",   cmd_list))
         log.info("TG управляющий бот запущен. Команды: /start /stop /now /status /list")
-        # run_polling работает только из главного потока — именно там и вызываемся
         app.run_polling(drop_pending_updates=True)
     except Exception as e:
         log.error(f"TG control bot ошибка: {e}")
