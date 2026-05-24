@@ -186,12 +186,23 @@ def fulfill_active_contests():
             db.log_action(row["id"], "filtered_out_on_retry")
             continue
 
-        # Если репост ещё не сделан — попробовать
-        if not row["repost_id"]:
-            cond = parse_conditions(text)
-            if cond["feasible"]:
-                _fulfill_contest(row["id"], row["owner_id"], row["post_id"], cond,
-                                 row["vk_post_id"], row["end_date"] or "", row["conditions_raw"] or "")
+        # Проверяем, все ли нужные действия уже выполнены
+        cond = parse_conditions(text)
+        if not cond["feasible"]:
+            continue
+
+        already_done = True
+        if cond["need_repost"]  and not row["repost_id"]:      already_done = False
+        if cond["need_like"]    and not row["liked"]:           already_done = False
+        if cond["need_join"]    and not row["joined_groups"]:   already_done = False
+        if cond["need_comment"] and not row["commented"]:       already_done = False
+
+        if already_done:
+            log.debug(f"Конкурс #{row['id']} — все условия уже выполнены, пропускаем")
+            continue
+
+        _fulfill_contest(row["id"], row["owner_id"], row["post_id"], cond,
+                         row["vk_post_id"], row["end_date"] or "", row["conditions_raw"] or "")
 
 
 # ─────────────────────────────────────────────────────────
