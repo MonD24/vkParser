@@ -22,6 +22,7 @@ except ImportError:
 _scheduler_ref = None
 _run_cycle_fn  = None
 _bot_running   = True
+_cycle_lock    = threading.Lock()  # защита от параллельных /now
 
 
 def set_refs(scheduler, run_cycle_fn):
@@ -62,14 +63,19 @@ async def cmd_stop(update: "Update", ctx: "ContextTypes.DEFAULT_TYPE"):
 
 async def cmd_now(update: "Update", ctx: "ContextTypes.DEFAULT_TYPE"):
     if not _is_owner(update): return
-    await update.message.reply_text("🔍 Запускаю внеплановый цикл поиска...")
-    log.info("Внеплановый цикл по команде /now")
-    if _run_cycle_fn:
-        await ctx.application.updater.bot.get_me()  # keep-alive
-        import asyncio
-        loop = asyncio.get_event_loop()
-        await loop.run_in_executor(None, _run_cycle_fn)
-    await update.message.reply_text("✅ Цикл завершён.")
+    if not _cycle_lock.acquire(blocking=False):
+        await update.message.reply_text("⏳ Цикл уже выполняется, подождите...")
+        return
+    try:
+        await update.message.reply_text("🔍 Запускаю внеплановый цикл поиска...")
+        log.info("Внеплановый цикл по команде /now")
+        if _run_cycle_fn:
+            import asyncio
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(None, _run_cycle_fn)
+        await update.message.reply_text("✅ Цикл завершён.")
+    finally:
+        _cycle_lock.release()
 
 
 async def cmd_status(update: "Update", ctx: "ContextTypes.DEFAULT_TYPE"):
