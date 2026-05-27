@@ -64,9 +64,7 @@ TG_CHAT_ID=123456789
 ```
 
 **Как получить VK токен**  перейди по ссылке в браузере (залогинен как нужный пользователь):
-```
-https://oauth.vk.com/authorize?client_id=2685278&scope=friends,wall,messages,groups,offline&redirect_uri=https://oauth.vk.com/blank.html&display=page&response_type=token
-```
+
 Из адресной строки скопируй `access_token=...` до `&expires_in`.
 
 **Как получить Telegram chat_id**  напиши [@userinfobot](https://t.me/userinfobot).
